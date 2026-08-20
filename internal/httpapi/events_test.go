@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"webhook-event-router/internal/webhook"
@@ -165,6 +167,73 @@ func TestDeliveryRetry(t *testing.T) {
 	if dels[0].Status != "retrying" && dels[0].Status != "dead" {
 		t.Fatalf("expected retrying/dead, got %s", dels[0].Status)
 	}
+}
+
+func TestSingleTargetDeliveredWhenTargetReturns200(t *testing.T) {
+	// 目标在 HTTP 层返回 200，并统计收到的请求次数。
+	var received atomic.Int32
+	targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer targetSrv.Close()
+
+	ts, _ := setup(t, true)
+	secret := "s"
+	src := createResource(t, ts, "/api/v1/sources", map[string]any{
+		"name": "s-delivered", "secret": secret,
+		"allowed_event_types": []string{"push"},
+	})
+	srcID := int64(src["id"].(float64))
+	tg := createResource(t, ts, "/api/v1/targets", map[string]any{
+		"name": "ok-target", "url": targetSrv.URL,
+	})
+	targetID := int64(tg["id"].(float64))
+	createResource(t, ts, "/api/v1/rules", map[string]any{
+		"name": "r-delivered", "source_id": srcID, "event_type": "push",
+		"target_id": targetID,
+		"condition": []map[string]any{{"path": "repo", "op": "eq", "value": "webhook-router"}},
+	})
+
+	reqBody := map[string]any{
+		"source_id": srcID, "event_type": "push", "event_id": "evt-delivered",
+		"payload": map[string]any{"repo": "webhook-router"},
+	}
+	rawReq, _ := json.Marshal(reqBody)
+	sig := webhook.Sign(secret, rawReq)
+	resp, m := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/v1/events",
+		reqBody, map[string]string{"X-Signature": sig})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %v", resp.StatusCode, m)
+	}
+
+	// 目标返回 200，出站转发必须真正到达目标。
+	if got := received.Load(); got == 0 {
+		t.Fatalf("target returned 200 but backend never received the forward: received=%d", got)
+	}
+
+	// 查询事件与投递，均应处于 delivered 而非 failed/retrying/dead。
+	eventID := int64(m["event_id"].(float64))
+	gresp, gbody := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/v1/events/"+formatInt(eventID), nil, nil)
+	if gresp.StatusCode != http.StatusOK {
+		t.Fatalf("get event %d: %v", gresp.StatusCode, gbody)
+	}
+	event, _ := gbody["event"].(map[string]any)
+	if st, _ := event["status"].(string); st != "delivered" {
+		t.Fatalf("expected event status delivered, got %q (event=%v)", st, event)
+	}
+	deliveries, _ := gbody["deliveries"].([]any)
+	if len(deliveries) != 1 {
+		t.Fatalf("expected 1 delivery, got %d: %v", len(deliveries), gbody)
+	}
+	dv, _ := deliveries[0].(map[string]any)["delivery"].(map[string]any)
+	if st, _ := dv["status"].(string); st != "delivered" {
+		t.Fatalf("expected delivery status delivered, got %q (delivery=%v)", st, dv)
+	}
+}
+
+func formatInt(v int64) string {
+	return strconv.FormatInt(v, 10)
 }
 
 func TestWhitelistBlocked(t *testing.T) {
