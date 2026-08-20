@@ -44,6 +44,19 @@ func New(st store.Store, att AttemptStore, cfg *config.Config) *Dispatcher {
 
 // Deliver 对单个目标执行转发并记录投递与尝试。
 func (d *Dispatcher) Deliver(ctx context.Context, event *domain.Event, rule *domain.Rule, target *domain.Target) (*domain.Delivery, error) {
+	return d.DeliverWithContext(ctx, ctx, event, rule, target)
+}
+
+// DeliverWithContext 与 Deliver 行为一致，但允许调用方提供独立的投递上下文
+// dctx 以单独控制出站 HTTP 请求的生命周期；ctx 则用于投递记录等存储写入。
+//
+// 将出站网络请求与存储写入的生命周期拆分开，使调用方可以在请求处理结束后
+// 仍保留出站转发的独立性：存储写入跟随 ctx，而出站 POST 跟随 dctx。
+// 当 dctx 为空时回退到 ctx。
+func (d *Dispatcher) DeliverWithContext(ctx context.Context, dctx context.Context, event *domain.Event, rule *domain.Rule, target *domain.Target) (*domain.Delivery, error) {
+	if dctx == nil {
+		dctx = ctx
+	}
 	delivery := &domain.Delivery{
 		EventID:  event.ID,
 		RuleID:   rule.ID,
@@ -61,13 +74,13 @@ func (d *Dispatcher) Deliver(ctx context.Context, event *domain.Event, rule *dom
 		d.store.UpdateDelivery(ctx, delivery)
 		return delivery, nil
 	}
-	d.send(ctx, delivery, target, event.Payload)
+	d.send(ctx, dctx, delivery, target, event.Payload)
 	return delivery, nil
 }
 
-func (d *Dispatcher) send(ctx context.Context, delivery *domain.Delivery, target *domain.Target, body string) {
+func (d *Dispatcher) send(ctx context.Context, dctx context.Context, delivery *domain.Delivery, target *domain.Target, body string) {
 	att := &domain.DeliveryAttempt{DeliveryID: delivery.ID, RequestBody: body, StartedAt: time.Now()}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.URL, bytes.NewBufferString(body))
+	req, err := http.NewRequestWithContext(dctx, http.MethodPost, target.URL, bytes.NewBufferString(body))
 	if err != nil {
 		att.Status = domain.DeliveryFailed
 		att.Error = err.Error()
@@ -136,7 +149,7 @@ func (d *Dispatcher) Retry(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		d.send(ctx, dv, target, event.Payload)
+		d.send(ctx, ctx, dv, target, event.Payload)
 	}
 }
 

@@ -129,7 +129,11 @@ func (s *Server) handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			seenTarget[tid] = true
-			dv, _ := s.dispatcher.Deliver(r.Context(), event, m.Rule, target)
+			dctx := deliveryContextOf(r.Context())
+			if len(m.TargetIDs) > 1 {
+				dctx = r.Context()
+			}
+			dv, _ := s.dispatcher.DeliverWithContext(r.Context(), dctx, event, m.Rule, target)
 			s.recordDeliveryStatus(dv)
 			switch dv.Status {
 			case domain.DeliveryDelivered:

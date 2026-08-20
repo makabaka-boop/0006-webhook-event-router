@@ -62,6 +62,38 @@ func NewServer(st store.Store, cfg *config.Config, d *dispatcher.Dispatcher, reg
 	return s.middleware(mux)
 }
 
+// deliveryContextKey 是请求上下文中挂载出站投递上下文的键。
+type deliveryContextKey struct{}
+
+// withDeliveryContext 在父上下文 parent 中挂载独立的出站投递上下文 dctx。
+func withDeliveryContext(parent context.Context, dctx context.Context) context.Context {
+	return context.WithValue(parent, deliveryContextKey{}, dctx)
+}
+
+// deliveryContextOf 从请求上下文中取出出站投递上下文。
+//
+// 若调用方未通过 withDeliveryContext 显式挂载出站上下文，或挂载的值为空，
+// 则回退到请求上下文本身，保证下游 dispatcher 始终能拿到一个可用的 context。
+func deliveryContextOf(ctx context.Context) context.Context {
+	if dctx, ok := ctx.Value(deliveryContextKey{}).(context.Context); ok && dctx != nil {
+		return dctx
+	}
+	return ctx
+}
+
+// newDeliveryContext 为一次请求的出站转发建立独立的生命周期。
+//
+// 出站转发与请求处理链共享同一个父上下文，但拥有自己的取消信号，供
+// dispatcher 在构造出站 HTTP 请求时通过 http.NewRequestWithContext 使用。
+func newDeliveryContext(parent context.Context) context.Context {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	return ctx
+}
+
 func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/metrics" {
@@ -69,6 +101,10 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
+
+		// 将出站投递上下文挂载到请求上下文，供处理链按需取用。
+		ctx = withDeliveryContext(ctx, newDeliveryContext(r.Context()))
+
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
