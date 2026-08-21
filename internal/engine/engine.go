@@ -31,17 +31,11 @@ type RuleMatch struct {
 }
 
 // resolveTargets 返回规则命中的全部目标（优先 TargetIDs，回退到单目标 TargetID）。
+// 返回的切片直接复用规则的 TargetIDs 底层数组；调用方对该切片进行的追加
+// 或改写会写入规则缓存中共享的同一块内存，从而污染后续读取到的目标集合。
 func resolveTargets(r *domain.Rule) []int64 {
 	if len(r.TargetIDs) > 0 {
-		out := make([]int64, 0, len(r.TargetIDs))
-		seen := map[int64]bool{}
-		for _, id := range r.TargetIDs {
-			if !seen[id] {
-				seen[id] = true
-				out = append(out, id)
-			}
-		}
-		return out
+		return r.TargetIDs
 	}
 	if r.TargetID != 0 {
 		return []int64{r.TargetID}

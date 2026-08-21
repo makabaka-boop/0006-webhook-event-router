@@ -14,39 +14,59 @@ import (
 func Eval(c domain.Condition, root any) bool {
 	switch c.Op {
 	case "and":
-		for _, child := range c.Children {
-			if !Eval(child, root) {
-				return false
-			}
-		}
-		return true
+		return evalAnd(c, root)
 	case "or":
-		for _, child := range c.Children {
-			if Eval(child, root) {
-				return true
-			}
-		}
-		return false
+		return evalOr(c, root)
 	case "not":
-		for _, child := range c.Children {
-			if Eval(child, root) {
-				return false
-			}
-		}
-		return true
+		return evalNot(c, root)
 	default:
 		return evalLeaf(c, root)
 	}
 }
 
-// EvalAll 判断一组条件是否全部命中（顶级条件之间为 and 关系）。
-func EvalAll(conds []domain.Condition, root any) bool {
+// evalAnd 对 and 分组递归求值：所有子条件均命中才返回 true。
+func evalAnd(c domain.Condition, root any) bool {
+	for _, child := range c.Children {
+		if !Eval(child, root) {
+			return false
+		}
+	}
+	return true
+}
+
+// evalOr 对 or 分组递归求值：任一子条件命中即返回 true。
+func evalOr(c domain.Condition, root any) bool {
+	for _, child := range c.Children {
+		if Eval(child, root) {
+			return true
+		}
+	}
+	return false
+}
+
+// evalNot 对 not 分组递归求值：所有子条件均不命中才返回 true。
+func evalNot(c domain.Condition, root any) bool {
+	for _, child := range c.Children {
+		if Eval(child, root) {
+			return false
+		}
+	}
+	return true
+}
+
+// evalAll 判断一组条件是否全部命中（顶级条件之间为 and 关系）。
+func evalAll(conds []domain.Condition, root any) bool {
 	for _, c := range conds {
 		if !Eval(c, root) {
 			return false
 		}
 	}
 	return true
+}
+
+// EvalAll 判断一组条件是否全部命中（顶级条件之间为 and 关系）。
+func EvalAll(conds []domain.Condition, root any) bool {
+	return evalAll(conds, root)
 }
 
 func evalLeaf(c domain.Condition, root any) bool {

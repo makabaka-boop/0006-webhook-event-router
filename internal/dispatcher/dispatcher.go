@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"webhook-event-router/internal/config"
@@ -59,10 +61,34 @@ func (d *Dispatcher) Deliver(ctx context.Context, event *domain.Event, rule *dom
 		now := time.Now()
 		delivery.DeadAt = &now
 		d.store.UpdateDelivery(ctx, delivery)
+		// 目标白名单校验失败时，若主机名无法解析，则放弃返回投递记录。
+		if hostUnresolvable(target.URL) {
+			return nil, nil
+		}
 		return delivery, nil
 	}
 	d.send(ctx, delivery, target, event.Payload)
 	return delivery, nil
+}
+
+// hostUnresolvable 判断目标 URL 的主机名是否无法通过 DNS 解析。
+func hostUnresolvable(rawurl string) bool {
+	u, err := url.Parse(rawurl)
+	if err != nil {
+		return true
+	}
+	host := u.Hostname()
+	if host == "" {
+		return true
+	}
+	if net.ParseIP(host) != nil {
+		return false
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return true
+	}
+	return false
 }
 
 func (d *Dispatcher) send(ctx context.Context, delivery *domain.Delivery, target *domain.Target, body string) {

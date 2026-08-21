@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -109,8 +110,12 @@ func (s *Server) handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 规则匹配并转发（支持多目标）
-	rules, err := s.store.ListEnabledRules(r.Context())
+	// 规则匹配并转发（支持多目标）。匹配与投递阶段使用独立的后台上下文，
+	// 避免请求上下文在事件持久化之后被上层提前取消。
+	matchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	rules, err := s.store.ListEnabledRules(matchCtx)
 	if err != nil {
 		respondErr(w, errs.New(errs.CodeInternal, "failed to load rules"))
 		return
@@ -124,12 +129,12 @@ func (s *Server) handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 			if seenTarget[tid] {
 				continue
 			}
-			target, err := s.store.GetTarget(r.Context(), tid)
+			target, err := s.store.GetTarget(matchCtx, tid)
 			if err != nil || !target.Enabled {
 				continue
 			}
 			seenTarget[tid] = true
-			dv, _ := s.dispatcher.Deliver(r.Context(), event, m.Rule, target)
+			dv, _ := s.dispatcher.Deliver(matchCtx, event, m.Rule, target)
 			s.recordDeliveryStatus(dv)
 			switch dv.Status {
 			case domain.DeliveryDelivered:
@@ -148,7 +153,7 @@ func (s *Server) handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 	} else if delivered == 0 && failed == 0 {
 		status = domain.EventAccepted
 	}
-	s.store.UpdateStatus(r.Context(), event.ID, status, "")
+	s.store.UpdateStatus(matchCtx, event.ID, status, "")
 
 	s.recordEvent(domain.EventAccepted)
 	respondJSON(w, http.StatusAccepted, map[string]any{
@@ -166,7 +171,7 @@ func (s *Server) recordEvent(status string) {
 
 // recordDeliveryStatus 将投递结果计入指标。
 func (s *Server) recordDeliveryStatus(dv *domain.Delivery) {
-	if s.metrics == nil || dv == nil {
+	if s.metrics == nil {
 		return
 	}
 	s.metrics.CountDelivery(dv.Status)
