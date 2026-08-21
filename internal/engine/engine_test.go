@@ -43,3 +43,19 @@ func TestSelectTargets(t *testing.T) {
 		t.Fatalf("expected [10], got %v", got)
 	}
 }
+
+func TestMatchRulesDoesNotAliasRuleTargets(t *testing.T) {
+	rule := &domain.Rule{ID: 1, Enabled: true, TargetIDs: []int64{10, 20}}
+	matches := MatchRules([]*domain.Rule{rule}, 0, "", []byte(`{}`))
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if len(matches[0].TargetIDs) != 2 {
+		t.Fatalf("expected 2 targets, got %v", matches[0].TargetIDs)
+	}
+	// 改写返回切片的元素不应波及规则自身的目标缓存。
+	matches[0].TargetIDs[0] = 99
+	if rule.TargetIDs[0] != 10 {
+		t.Fatalf("MatchRules aliased rule.TargetIDs: rule target mutated to %v", rule.TargetIDs)
+	}
+}
