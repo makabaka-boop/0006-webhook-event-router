@@ -1,0 +1,15 @@
+.git
+.gitignore
+bin/
+Dockerfile
+benzhi.Dockerfile
+build_benzhi_docker.sh
+BENZHI_README.md
+vendor/
+node_modules/
+dist/
+*.db
+*.db-wal
+*.db-shm
+*.log
+.DS_Store
